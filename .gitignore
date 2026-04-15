@@ -1,0 +1,27 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Client configs (contain private keys)
+clients/
+*.ovpn
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# SSH keys (if accidentally placed here)
+*.pem
+id_rsa
+id_ed25519
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
