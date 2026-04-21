@@ -30,16 +30,55 @@ def cmd_setup(clients: list[str]):
     asyncio.run(run())
 
 
-def cmd_up():
-    from vpn.commands import vpn_up
+def _prompt_region(regions, default_slug: str) -> str | None:
+    """Prompt the user to pick a region. Returns the slug, or None if cancelled."""
+    default_idx = 0
+    for i, r in enumerate(regions):
+        if r.slug == default_slug:
+            default_idx = i
+            break
+
+    print("Select region:")
+    for i, r in enumerate(regions):
+        default_marker = "*" if i == default_idx else " "
+        print(f"  {i + 1:>2}) {default_marker} {r.slug:<6}  {r.name}")
+
+    reply = input(f"Choice [{default_idx + 1}]: ").strip()
+    if not reply:
+        return regions[default_idx].slug
+    try:
+        idx = int(reply) - 1
+    except ValueError:
+        return None
+    if not (0 <= idx < len(regions)):
+        return None
+    return regions[idx].slug
+
+
+def cmd_up(region: str | None = None):
+    from vpn.commands import list_up_regions, vpn_up
+    from vpn.config import DO_REGION
 
     async def run():
         print("=== VPN Up ===")
 
+        chosen = region
+        if chosen is None:
+            regions = await list_up_regions()
+            if len(regions) == 1:
+                chosen = regions[0].slug
+                print(f"Region: {chosen} ({regions[0].name})")
+            elif len(regions) > 1:
+                chosen = _prompt_region(regions, DO_REGION)
+                if chosen is None:
+                    print("Invalid choice. Cancelled.")
+                    return
+            # If zero regions (no snapshot), fall through — vpn_up will error.
+
         async def on_progress(text: str):
             print(text)
 
-        result = await vpn_up(on_progress=on_progress)
+        result = await vpn_up(region=chosen, on_progress=on_progress)
         if result.status == "ready":
             print(f"\nVPN is ready!")
             print(f"  IP:  {result.ip}")
@@ -65,12 +104,7 @@ def cmd_down():
             print("No running VPN droplet found.")
             return
 
-        print(f"Found VPN droplet: ID={status.droplet_id} IP={status.ip}")
-        reply = input("Destroy this droplet? (y/N) ").strip()
-        if reply.lower() != "y":
-            print("Cancelled.")
-            return
-
+        print(f"Destroying droplet: ID={status.droplet_id} IP={status.ip}")
         result = await vpn_down()
         print(result.message)
 
@@ -171,7 +205,11 @@ def main():
         "--clients", nargs="+", default=["phone", "laptop", "tablet"],
         help="Client names to generate .ovpn configs for (default: phone laptop tablet)",
     )
-    sub.add_parser("up", help="Start VPN (create droplet from snapshot)")
+    up_parser = sub.add_parser("up", help="Start VPN (create droplet from snapshot)")
+    up_parser.add_argument(
+        "--region", default=None,
+        help="DO region slug (e.g. ams3, fra1). If omitted, you'll be prompted when multiple are available.",
+    )
     sub.add_parser("down", help="Stop VPN (destroy droplet)")
     sub.add_parser("status", help="Show VPN status")
     sub.add_parser("cleanup", help="Delete all droplets and snapshots")
@@ -184,8 +222,11 @@ def main():
         cmd_setup(args.clients)
         return
 
+    if args.command == "up":
+        cmd_up(region=args.region)
+        return
+
     commands = {
-        "up": cmd_up,
         "down": cmd_down,
         "status": cmd_status,
         "cleanup": cmd_cleanup,

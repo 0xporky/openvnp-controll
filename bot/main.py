@@ -8,7 +8,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from vpn.commands import vpn_cleanup, vpn_down, vpn_status, vpn_up
+from vpn.commands import list_up_regions, vpn_cleanup, vpn_down, vpn_status, vpn_up
 from vpn.config import TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID
 
 logging.basicConfig(
@@ -37,24 +37,25 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-@authorized
-async def cmd_up(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("Starting VPN...")
+async def _start_vpn(message_or_query, region: str):
+    """Run vpn_up in the given region, editing the given Telegram message with progress/result.
 
+    `message_or_query` must expose `edit_text` (works for both a sent Message and a CallbackQuery).
+    """
     async def on_progress(text: str):
         try:
-            await msg.edit_text(text)
+            await message_or_query.edit_text(text)
         except Exception:
             pass
 
     try:
-        result = await vpn_up(on_progress=on_progress)
+        result = await vpn_up(region=region, on_progress=on_progress)
     except Exception as e:
-        await msg.edit_text(f"Error: {e}")
+        await message_or_query.edit_text(f"Error: {e}")
         return
 
     if result.status == "ready":
-        await msg.edit_text(
+        await message_or_query.edit_text(
             f"VPN is ready!\n\n"
             f"IP: `{result.ip}`\n"
             f"DNS: `{result.dns}`\n\n"
@@ -62,56 +63,109 @@ async def cmd_up(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
     elif result.status == "already_running":
-        await msg.edit_text(
+        await message_or_query.edit_text(
             f"VPN is already running.\n\n"
             f"IP: `{result.ip}`\n"
             f"DNS: `{result.dns}`",
             parse_mode="Markdown",
         )
     else:
-        await msg.edit_text(f"Error: {result.message}")
+        await message_or_query.edit_text(f"Error: {result.message}")
 
 
 @authorized
-async def cmd_down(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_up(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        result = await vpn_status()
+        status = await vpn_status()
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
         return
 
-    if not result.running:
-        await update.message.reply_text("No running VPN droplet found.")
+    if status.running:
+        await update.message.reply_text(
+            f"VPN is already running.\n\n"
+            f"IP: `{status.ip}`\n"
+            f"DNS: `{status.dns}`",
+            parse_mode="Markdown",
+        )
         return
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Yes, destroy", callback_data="down_yes"),
-            InlineKeyboardButton("Cancel", callback_data="down_no"),
-        ]
-    ])
+    try:
+        regions = await list_up_regions()
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+        return
+
+    if not regions:
+        await update.message.reply_text(
+            "No snapshot found. Run setup first."
+        )
+        return
+
+    if len(regions) == 1:
+        r = regions[0]
+        msg = await update.message.reply_text(f"Starting VPN in {r.slug} ({r.name})...")
+        await _start_vpn(msg, r.slug)
+        return
+
+    rows = []
+    pair = []
+    for r in regions:
+        pair.append(
+            InlineKeyboardButton(
+                f"{r.name} ({r.slug})",
+                callback_data=f"up_region_{r.slug}",
+            )
+        )
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([InlineKeyboardButton("Cancel", callback_data="up_region_cancel")])
+
     await update.message.reply_text(
-        f"Destroy VPN droplet?\n\nIP: `{result.ip}`\nRegion: {result.region}",
-        reply_markup=keyboard,
-        parse_mode="Markdown",
+        "Select region:",
+        reply_markup=InlineKeyboardMarkup(rows),
     )
 
 
-async def callback_down(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_up_region(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query.from_user.id != TELEGRAM_USER_ID:
         return
     await query.answer()
 
-    if query.data == "down_yes":
-        await query.edit_message_text("Destroying droplet...")
-        try:
-            result = await vpn_down()
-            await query.edit_message_text(result.message)
-        except Exception as e:
-            await query.edit_message_text(f"Error: {e}")
-    else:
+    slug = query.data.removeprefix("up_region_")
+    if slug == "cancel":
         await query.edit_message_text("Cancelled.")
+        return
+
+    await query.edit_message_text(f"Starting VPN in {slug}...")
+    await _start_vpn(query, slug)
+
+
+@authorized
+async def cmd_down(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        status = await vpn_status()
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+        return
+
+    if not status.running:
+        await update.message.reply_text("No running VPN droplet found.")
+        return
+
+    msg = await update.message.reply_text(
+        f"Destroying droplet...\n\nIP: `{status.ip}`\nRegion: {status.region}",
+        parse_mode="Markdown",
+    )
+    try:
+        result = await vpn_down()
+        await msg.edit_text(result.message)
+    except Exception as e:
+        await msg.edit_text(f"Error: {e}")
 
 
 @authorized
@@ -196,7 +250,7 @@ def run_bot():
     app.add_handler(CommandHandler("down", cmd_down))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cleanup", cmd_cleanup))
-    app.add_handler(CallbackQueryHandler(callback_down, pattern="^down_"))
+    app.add_handler(CallbackQueryHandler(callback_up_region, pattern="^up_region_"))
     app.add_handler(CallbackQueryHandler(callback_cleanup, pattern="^cleanup_"))
 
     logger.info("Bot started. Press Ctrl+C to stop.")

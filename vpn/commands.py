@@ -45,6 +45,7 @@ class SnapshotInfo:
     name: str
     size_gb: float
     created_at: str
+    regions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -93,7 +94,37 @@ async def _find_latest_snapshot() -> dict | None:
     return matching[-1]
 
 
-async def _get_snapshots_info() -> list[SnapshotInfo]:
+@dataclass
+class RegionOption:
+    slug: str
+    name: str
+
+
+async def list_up_regions() -> list[RegionOption]:
+    """Return regions where the latest snapshot exists AND that can boot the configured size.
+
+    Empty list if no snapshot exists yet.
+    """
+    snapshot = await _find_latest_snapshot()
+    if not snapshot:
+        return []
+    snapshot_slugs = set(snapshot.get("regions", []))
+    if not snapshot_slugs:
+        return []
+    all_regions = await do_api.list_regions()
+    options = [
+        RegionOption(slug=r["slug"], name=r["name"])
+        for r in all_regions
+        if r["slug"] in snapshot_slugs
+        and r.get("available")
+        and DO_SIZE in r.get("sizes", [])
+    ]
+    options.sort(key=lambda o: o.name)
+    return options
+
+
+async def list_vpn_snapshots() -> list[SnapshotInfo]:
+    """Return all snapshots matching SNAPSHOT_PREFIX, in DO's listing order (oldest first)."""
     snapshots = await do_api.list_snapshots()
     matching = [s for s in snapshots if s["name"].startswith(SNAPSHOT_PREFIX)]
     return [
@@ -102,6 +133,7 @@ async def _get_snapshots_info() -> list[SnapshotInfo]:
             name=s["name"],
             size_gb=s["size_gigabytes"],
             created_at=s["created_at"],
+            regions=s.get("regions", []),
         )
         for s in matching
     ]
@@ -227,7 +259,7 @@ async def vpn_setup(client_names: list[str] | None = None, on_progress=None) -> 
         )
 
 
-async def vpn_up(on_progress=None) -> VpnUpResult:
+async def vpn_up(region: str | None = None, on_progress=None) -> VpnUpResult:
     # Check if already running
     droplets = await do_api.list_droplets(DROPLET_TAG)
     if droplets:
@@ -242,13 +274,24 @@ async def vpn_up(on_progress=None) -> VpnUpResult:
             message=f"No snapshot found with prefix '{SNAPSHOT_PREFIX}'. Run setup first.",
         )
 
+    chosen_region = region or DO_REGION
+    available = snapshot.get("regions", [])
+    if available and chosen_region not in available:
+        return VpnUpResult(
+            status="error",
+            message=(
+                f"Snapshot '{snapshot['name']}' is not available in region '{chosen_region}'. "
+                f"Available: {', '.join(available)}."
+            ),
+        )
+
     if on_progress:
-        await on_progress(f"Creating droplet from snapshot {snapshot['name']}...")
+        await on_progress(f"Creating droplet in {chosen_region} from snapshot {snapshot['name']}...")
 
     # Create droplet
     droplet = await do_api.create_droplet(
         name=DROPLET_NAME,
-        region=DO_REGION,
+        region=chosen_region,
         size=DO_SIZE,
         image=int(snapshot["id"]),
         ssh_keys=[SSH_KEY_FINGERPRINT],
@@ -327,7 +370,7 @@ async def vpn_down() -> VpnDownResult:
 
 async def vpn_status() -> VpnStatusResult:
     droplets = await do_api.list_droplets(DROPLET_TAG)
-    snapshots = await _get_snapshots_info()
+    snapshots = await list_vpn_snapshots()
 
     if not droplets:
         return VpnStatusResult(running=False, snapshots=snapshots)

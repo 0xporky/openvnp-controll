@@ -22,6 +22,13 @@ async def list_droplets(tag: str) -> list[dict]:
         return resp.json()["droplets"]
 
 
+async def list_regions() -> list[dict]:
+    async with await _client() as client:
+        resp = await client.get("/regions")
+        resp.raise_for_status()
+        return resp.json()["regions"]
+
+
 async def get_droplet(droplet_id: int) -> dict:
     async with await _client() as client:
         resp = await client.get(f"/droplets/{droplet_id}")
