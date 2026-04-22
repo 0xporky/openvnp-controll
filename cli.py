@@ -55,25 +55,60 @@ def _prompt_region(regions, default_slug: str) -> str | None:
     return regions[idx].slug
 
 
-def cmd_up(region: str | None = None):
-    from vpn.commands import list_up_regions, vpn_up
+def _prompt_hours(default: int = 2) -> int | None:
+    """Prompt the user to pick a session duration (1-12h). Returns hours, or None if cancelled."""
+    print("Select duration:")
+    for h in range(1, 13):
+        default_marker = "*" if h == default else " "
+        print(f"  {h:>2}) {default_marker} {h}h")
+
+    reply = input(f"Choice [{default}]: ").strip()
+    if not reply:
+        return default
+    try:
+        h = int(reply)
+    except ValueError:
+        return None
+    if not 1 <= h <= 12:
+        return None
+    return h
+
+
+async def _resolve_region(region: str | None) -> tuple[str | None, bool]:
+    """Resolve a region slug, prompting interactively when needed.
+
+    Returns (slug, cancelled). `slug` may be None when no snapshot exists yet;
+    callers should pass it through so `vpn_up` surfaces the real error.
+    """
+    from vpn.commands import list_up_regions
     from vpn.config import DO_REGION
+
+    if region is not None:
+        return region, False
+
+    regions = await list_up_regions()
+    if len(regions) == 1:
+        chosen = regions[0].slug
+        print(f"Region: {chosen} ({regions[0].name})")
+        return chosen, False
+    if len(regions) > 1:
+        chosen = _prompt_region(regions, DO_REGION)
+        if chosen is None:
+            print("Invalid choice. Cancelled.")
+            return None, True
+        return chosen, False
+    return None, False  # no snapshots; let vpn_up raise
+
+
+def cmd_up(region: str | None = None):
+    from vpn.commands import vpn_up
 
     async def run():
         print("=== VPN Up ===")
 
-        chosen = region
-        if chosen is None:
-            regions = await list_up_regions()
-            if len(regions) == 1:
-                chosen = regions[0].slug
-                print(f"Region: {chosen} ({regions[0].name})")
-            elif len(regions) > 1:
-                chosen = _prompt_region(regions, DO_REGION)
-                if chosen is None:
-                    print("Invalid choice. Cancelled.")
-                    return
-            # If zero regions (no snapshot), fall through — vpn_up will error.
+        chosen, cancelled = await _resolve_region(region)
+        if cancelled:
+            return
 
         async def on_progress(text: str):
             print(text)
@@ -92,6 +127,71 @@ def cmd_up(region: str | None = None):
             sys.exit(1)
 
     asyncio.run(run())
+
+
+def cmd_up_timed(hours: int | None = None, region: str | None = None):
+    from datetime import datetime, timedelta
+
+    from vpn.commands import vpn_down, vpn_up
+
+    async def run():
+        print("=== VPN Up (timed) ===")
+
+        chosen_hours = hours
+        if chosen_hours is None:
+            chosen_hours = _prompt_hours()
+            if chosen_hours is None:
+                print("Invalid choice. Cancelled.")
+                return
+
+        chosen_region, cancelled = await _resolve_region(region)
+        if cancelled:
+            return
+
+        async def on_progress(text: str):
+            print(text)
+
+        result = await vpn_up(region=chosen_region, on_progress=on_progress)
+
+        if result.status == "already_running":
+            print(
+                f"VPN is already running at {result.ip}.\n"
+                f"`up-timed` only tracks droplets it creates. "
+                f"Run 'python cli.py down' first."
+            )
+            return
+        if result.status != "ready":
+            print(f"ERROR: {result.message}")
+            sys.exit(1)
+
+        expiry = datetime.now() + timedelta(hours=chosen_hours)
+        print(f"\nVPN is ready!")
+        print(f"  IP:  {result.ip}")
+        print(f"  DNS: {result.dns}")
+        print(
+            f"\nWill auto-destroy at {expiry.strftime('%H:%M')} "
+            f"(in {chosen_hours}h 0m)."
+        )
+        print("Press Ctrl+C to cancel the timer (droplet will persist).")
+
+        try:
+            await asyncio.sleep(chosen_hours * 3600)
+        except asyncio.CancelledError:
+            print(
+                "\nTimer cancelled. Droplet still running — "
+                "run 'python cli.py down' to destroy."
+            )
+            return
+
+        print("\nTimer elapsed. Destroying droplet...")
+        down_result = await vpn_down()
+        print(down_result.message)
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        # Message already printed inside run(); swallow so the shell exits 0.
+        pass
 
 
 def cmd_down():
@@ -210,6 +310,18 @@ def main():
         "--region", default=None,
         help="DO region slug (e.g. ams3, fra1). If omitted, you'll be prompted when multiple are available.",
     )
+    up_timed_parser = sub.add_parser(
+        "up-timed",
+        help="Start VPN for a bounded duration (1-12h), then auto-destroy",
+    )
+    up_timed_parser.add_argument(
+        "--hours", type=int, default=None, choices=range(1, 13), metavar="{1..12}",
+        help="Session duration in hours (1-12). If omitted, you'll be prompted.",
+    )
+    up_timed_parser.add_argument(
+        "--region", default=None,
+        help="DO region slug (e.g. ams3, fra1). If omitted, you'll be prompted when multiple are available.",
+    )
     sub.add_parser("down", help="Stop VPN (destroy droplet)")
     sub.add_parser("status", help="Show VPN status")
     sub.add_parser("cleanup", help="Delete all droplets and snapshots")
@@ -224,6 +336,10 @@ def main():
 
     if args.command == "up":
         cmd_up(region=args.region)
+        return
+
+    if args.command == "up-timed":
+        cmd_up_timed(hours=args.hours, region=args.region)
         return
 
     commands = {

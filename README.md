@@ -91,6 +91,7 @@ Available options:
 |--------|-------------|
 | Setup | Install OpenVPN, generate clients, create snapshot |
 | Start VPN | Create droplet from snapshot |
+| Start VPN (timed) | Create droplet, auto-destroy after 1-12 hours |
 | Stop VPN | Destroy the running droplet (snapshot preserved) |
 | Status | Show VPN status, DNS, and snapshots |
 | Cleanup | Delete ALL droplets and snapshots |
@@ -108,6 +109,11 @@ python cli.py setup --clients phone laptop tablet   # custom client names
 
 # Start the VPN
 python cli.py up
+
+# Start the VPN for a bounded session (1-12h), then auto-destroy
+python cli.py up-timed                       # prompts for hours + region
+python cli.py up-timed --hours 3             # non-interactive; process blocks for 3h
+# Ctrl+C cancels the timer but leaves the droplet running — use `down` to destroy it.
 
 # Check status
 python cli.py status
@@ -152,7 +158,8 @@ Open your bot in Telegram and use these commands:
 |---------|-------------|
 | `/start` | Show available commands |
 | `/up` | Start VPN (create droplet from snapshot) |
-| `/down` | Stop VPN (destroy droplet, with confirmation) |
+| `/up_timed` | Start VPN for 1-12 hours, then auto-destroy |
+| `/down` | Stop VPN (destroy droplet) |
 | `/status` | Show VPN status, IP, DNS, and snapshots |
 | `/cleanup` | Delete all droplets and snapshots (with confirmation) |
 

@@ -19,6 +19,8 @@ python menu.py
 python cli.py setup                          # one-time: install OpenVPN, gen clients, snapshot
 python cli.py setup --clients phone laptop   # custom client names
 python cli.py up                             # create droplet from snapshot
+python cli.py up-timed                       # create droplet, auto-destroy after 1-12h (blocks)
+python cli.py up-timed --hours 3 --region ams3
 python cli.py down                           # destroy droplet (snapshot preserved)
 python cli.py status                         # show status, DNS, snapshots
 python cli.py cleanup                        # delete ALL droplets and snapshots
@@ -26,7 +28,7 @@ python cli.py clear-clients                  # delete local .ovpn files
 python cli.py bot                            # start Telegram bot
 
 # Syntax check (no test suite exists)
-python -c "import ast; ast.parse(open('cli.py').read()); ast.parse(open('menu.py').read())"
+python -c "import ast; [ast.parse(open(f).read()) for f in ('cli.py','menu.py','bot/main.py')]"
 python -c "import ast; [ast.parse(open(f'vpn/{f}').read()) for f in ('commands.py','do_api.py','ssh.py','config.py')]"
 ```
 

@@ -11,6 +11,7 @@ import termios
 MENU_ITEMS = [
     ("Setup", "Initial setup: install OpenVPN, generate clients, create snapshot"),
     ("Start VPN", "Create droplet from snapshot and start VPN"),
+    ("Start VPN (timed)", "Create droplet, auto-destroy after 1-12 hours"),
     ("Stop VPN", "Destroy the running droplet (snapshot preserved)"),
     ("Status", "Show VPN status, DNS, and snapshots"),
     ("Cleanup", "Delete ALL droplets and snapshots"),
@@ -22,11 +23,12 @@ MENU_ITEMS = [
 COMMANDS = {
     0: [sys.executable, "cli.py", "setup"],
     1: [sys.executable, "cli.py", "up"],
-    2: [sys.executable, "cli.py", "down"],
-    3: [sys.executable, "cli.py", "status"],
-    4: [sys.executable, "cli.py", "cleanup"],
-    5: [sys.executable, "cli.py", "clear-clients"],
-    6: [sys.executable, "cli.py", "bot"],
+    2: [sys.executable, "cli.py", "up-timed"],
+    3: [sys.executable, "cli.py", "down"],
+    4: [sys.executable, "cli.py", "status"],
+    5: [sys.executable, "cli.py", "cleanup"],
+    6: [sys.executable, "cli.py", "clear-clients"],
+    7: [sys.executable, "cli.py", "bot"],
 }
 
 
@@ -64,9 +66,9 @@ def draw_menu(selected: int):
 
     for i, (label, desc) in enumerate(MENU_ITEMS):
         if i == selected:
-            print(f"  \033[38;5;114m > {label:<14} \033[0m  {desc}")
+            print(f"  \033[38;5;114m > {label:<18} \033[0m  {desc}")
         else:
-            print(f"    {label:<14}   {desc}")
+            print(f"    {label:<18}   {desc}")
 
     print()
 
